@@ -1,0 +1,180 @@
+#!/usr/bin/bash
+ cd ~
+ mkdir ~/B221706
+ mkdir ~/B221706/rowseq
+ cp /localdisk/data/BPSM/ICA1/fastq/*fq.gz ~/B221706/rowseq
+ cp /localdisk/data/BPSM/ICA1/fastq/Tco.fqfiles ~/B221706/rowseq
+
+#copy the row sequences from localdisk
+
+ sed -i "1d" ~/B221706/rowseq/Tco.fqfiles
+#remove the first line which is the head of the list
+#in order to read the Tco name smoothly
+ cat ~/B221706/rowseq/Tco.fqfiles | cut -f 1 >rownamel
+ n=$(wc -l rownamel | cut -d " " -f 1)
+ for ((i=1;i<=${n};i+=1))
+ do
+ rowname[${i}]=$(sed -n ${i}'p' rownamel)
+ rowname1[${i}]="${rowname[${i}]:0:3}-${rowname[${i}]:3:4}_1"
+ rowname2[${i}]="${rowname[${i}]:0:3}-${rowname[${i}]:3:4}_2"
+ done
+#creat the sequence name with _1 and _2
+
+ cd ~/B221706/rowseq
+ gunzip ~/B221706/rowseq/*.fq.gz
+ fastqc ~/B221706/rowseq/*.fq
+
+#analysis the sequencing quality
+ cd ~/B211706/rowseq
+ for ((i=1;i<=${n};i+=1))
+ do
+ unzip -d ~/B221706/rowseq  ~/B221706/rowseq/"${rowname1[${i}]}_fastqc.zip"
+ unzip -d ~/B221706/rowseq  ~/B221706/rowseq/"${rowname2[${i}]}_fastqc.zip"
+ done
+ mkdir ~/B221706/rowseq/badquality
+ for ((i=1;i<=${n};i+=1))
+ do
+ grep  "FAIL"  ~/B221706/rowseq/"${rowname1[${i}]}_fastqc"/summary.txt >> ~/B221706/rowseq/badquality/"${rowname1[${i}]}test"
+ grep  "WARN"  ~/B221706/rowseq/"${rowname1[${i}]}_fastqc"/summary.txt >> ~/B221706/rowseq/badquality/"${rowname1[${i}]}test"
+ grep  "FAIL"  ~/B221706/rowseq/"${rowname2[${i}]}_fastqc"/summary.txt >> ~/B221706/rowseq/badquality/"${rowname2[${i}]}test"
+ grep  "WARN"  ~/B221706/rowseq/"${rowname2[${i}]}_fastqc"/summary.txt >> ~/B221706/rowseq/badquality/"${rowname2[${i}]}test"
+ done
+
+#export the information of the "FAIL" and "WARN" to the test file, showing the bad aspect of the sequencing to user
+
+cd ~/B221706
+ mkdir ~/B221706/align
+ cp /localdisk/data/BPSM/ICA1/Tcongo_genome/TriTrypDB-46_TcongolenseIL3000_2019_Genome.fasta.gz  ~/B221706/align
+ gunzip ~/B221706/align/TriTrypDB-46_TcongolenseIL3000_2019_Genome.fasta.gz
+ bowtie2-build ~/B221706/align/TriTrypDB-46_TcongolenseIL3000_2019_Genome.fasta ~/B221706/align/ref
+
+#build a index using the fasta file given by ICA1
+
+ for ((i=1;i<=${n};i+=1))
+ do
+ bowtie2 -p 10 -x align/ref -1 ~/B221706/rowseq/"${rowname1[${i}]}.fq" -2 ~/B221706/rowseq/"${rowname2[${i}]}.fq" | samtools sort -O bam -@ 10 -o - > ~/B221706/align/"${rowname[${i}]}.bam"
+ done
+
+# using bowtie2 do a two-end anligning sequencing read using a long reference sequence
+
+ mkdir ~/B221706/overlap_read
+ cp /localdisk/data/BPSM/ICA1/TriTrypDB-46_TcongolenseIL3000_2019.bed ~/B221706/overlap_read
+ for ((i=1;i<=${n};i+=1))
+ do
+ bedtools coverage -a ~/B221706/overlap_read/TriTrypDB-46_TcongolenseIL3000_2019.bed -b ~/B221706/align/"${rowname[${i}]}.bam" > ~/B221706/overlap_read/"${rowname[${i}]}.cov"
+ done
+
+#choosing coverage method to calculate the number of read of every exons from the regions of the coding of the genes in every Tco sequences
+
+ mkdir ~/B221706/group
+ mkdir ~/B221706/calculation
+ type=$(sort -k 2 ~/B221706/rowseq/Tco.fqfiles | cut -f 2 |uniq)
+ time=$(sort -k 4 ~/B221706/rowseq/Tco.fqfiles | cut -f 4 |uniq)
+ treat=$(sort -k 5 ~/B221706/rowseq/Tco.fqfiles | cut -f 5 |uniq)
+#sort all the Tco sequences with the same genetype and the same method of treadment into one group
+ for i in ${type}; do
+ 	for x in ${time}
+	do
+		if [[ $x == 0 ]]
+#judge the time value. there is no induced option in time 0 hour, so if the time is 0 hour, there is only one option which is Uninduced.
+		then
+ 		cat ~/B221706/rowseq/Tco.fqfiles|grep -P "${i}\t.\t${x}\tUninduced"|cut -f 1|paste >> ~/B221706/group/"${i}_${x}_Uninduced"
+
+#grep the Tco name from Tco.fqfiles and relate the Tco name and information of the gene type and treatment
+
+		cd ~/B221706/group
+			for name1 in $(cat ${i}_${x}_Uninduced)
+			do
+
+			cut -f 6 ~/B221706/overlap_read/"${name1}.cov" | paste -s >> ~/B221706/calculation/"${i}_${x}_Uninduced"
+			done
+		cd .
+		awk '{for(q=1;q<=NF;q+=1){a[NR,q]=$q}}END{for(w=1;w<=NF;w+=1){str=a[1,w];for(q=2;q<=NR;q+=1){str=str "	" a[q,w]}print str}}' ~/B221706/calculation/"${i}_${x}_Uninduced" >> ~/B221706/calculation/"${i}_${x}_Uninduced_tran"
+#after the paste function, all the number is written in line. Using this function, changing the number structure from written in line to writing vertically
+		touch ~/B221706/calculation/"${i}_${x}_Uninduced_average"
+		touch ~/B221706/calculation/"${i}_${x}_Uninduced_summary"
+		touch ~/B221706/calculation/"${i}_${x}_Uninduced_result"
+		awk '{sum=0;for(q=1;q<=NF;q+=1){sum+=$q};printf("%.2f\n",sum/NF)}' ~/B221706/calculation/"${i}_${x}_Uninduced_tran" >> ~/B221706/calculation/"${i}_${x}_Uninduced_average"
+#calculate the average reads among three or four replicating for each exons in every group
+		cut -f 4,5 ~/B221706/overlap_read/"${name1}.cov" >> ~/B221706/calculation/"${i}_${x}_Uninduced_summary"
+#get all the gene name from 4th column and all the exons' function from 5th column, and transform all the information to a new file _summary
+		paste  ~/B221706/calculation/"${i}_${x}_Uninduced_summary" ~/B221706/calculation/"${i}_${x}_Uninduced_average" > ~/B221706/calculation/"${i}_${x}_Uninduced_result"
+#paste the average number and information of exon together. Because I don't change the order of all the genes, so each column lines up.
+		cat ~/B221706/calculation/"${i}_${x}_Uninduced_average" | awk '{print $1+0.00001}' | awk '{print log($1)}' > ~/B221706/calculation/"${i}_${x}_Uninduced_averagelog"
+#the sort function later will view the 0.23 bigger as 13 ,so I transform the number into log(number) so 
+		else
+			for y in ${treat}
+			do
+			cat ~/B221706/rowseq/Tco.fqfiles|grep -P "${i}\t.\t${x}\t${y}"|cut -f 1|paste  >> ~/B221706/group/"${i}_${x}_${y}"
+			cd ~/B221706/group
+				for name2 in $(cat ${i}_${x}_${y})
+				do
+				cut -f 6 ~/B221706/overlap_read/"${name2}.cov" | paste -s >> ~/B221706/calculation/"${i}_${x}_${y}"
+				done
+			cd .
+			awk '{for(q=1;q<=NF;q+=1){a[NR,q]=$q}}END{for(w=1;w<=NF;w+=1){str=a[1,w];for(q=2;q<=NR;q+=1){str=str "	"a[q,w]}print str}}' ~/B221706/calculation/"${i}_${x}_${y}" >> ~/B221706/calculation/"${i}_${x}_${y}_tran"
+			touch ~/B221706/calculation/"${i}_${x}_${y}_average"
+             		touch ~/B221706/calculation/"${i}_${x}_${y}_summary"
+	               	touch ~/B221706/calculation/"${i}_${x}_${y}_result"
+			awk '{sum=0;for(q=1;q<=NF;q+=1){sum+=$q};printf("%.2f\n",sum/NF)}' ~/B221706/calculation/"${i}_${x}_${y}_tran" >> ~/B221706/calculation/"${i}_${x}_${y}_average"
+			cut -f 4,5 ~/B221706/overlap_read/"${name2}.cov" >> ~/B221706/calculation/"${i}_${x}_${y}_summary"
+			paste  ~/B221706/calculation/"${i}_${x}_${y}_summary" ~/B221706/calculation/"${i}_${x}_${y}_average" > ~/B221706/calculation/"${i}_${x}_${y}_result"
+			cat ~/B221706/calculation/"${i}_${x}_${y}_average" | awk '{print $1+0.00001}' | awk '{print log($1)}' > ~/B221706/calculation/"${i}_${x}_${y}_averagelog"
+			done
+#operate these files ,whose time is 24 and 48 and treatment is Induced and Uninduced, in the same way
+		fi
+	done
+ done
+read -p "please enter the first cell line of Trypanosoma congolense among ${type} for comparison: "  type1
+read -p "please enter the first inducement condition among ${treat} for comparison: " treat1
+read -p "please enter the first treatment time among ${time} for comparison: " time1
+#To compare the result of two groups, user should input the first group's information first
+#get the information from user, typing on keyboard and showing on screen,for comparing the average of read of each exon.
+while [[ "${type}" != *"${type1}"* ]]
+do
+read -p "WRONG type, please enter the first cell line of Trypanosoma congolense among ${type} for comparison: " type1
+	while [[ "${treat}" != *"${treat1}"* ]]
+	do
+	read -p "WRONG treatment, please enter the first inducement condition among ${treat} for comparison: " treat1
+		while [[ "${time}" != *"${time1}"* ]]
+		do
+		read -p "WRONG treatment time, please enter the first treatment time among ${time} for comparison: " time1
+		done
+	done
+done
+#if user type something which is not included in the variable, there is a reminder to let the user type again to give a right word
+read -p "please enter the second cell line of Trypanosoma congolense among ${type} for comparison: "  type2
+read -p "please enter the second inducement condition among ${treat} for comparison: " treat2
+read -p "please enter the second treatment time among ${time} for comparison: " time2
+#ask user to input the second group's information then
+while [[ "${type}" != *"${type2}"* ]]
+do
+read -p "WRONG type, please enter the second cell line of Trypanosoma congolense among ${type} for comparison: " type2
+        while [[ "${treat}" != *"${treat2}"* ]]
+        do
+        read -p "WRONG treatment, please enter the second inducement condition among ${treat} for comparison: " treat2
+                while [[ "${time}" != *"${time2}"* ]]
+                do
+                read -p "WRONG treatment time, please enter the second treatment time among ${time} for comparison: " time2
+                done
+        done
+done
+sample1="${type1}_${time1}_${treat1}"
+sample2="${type2}_${time2}_${treat2}"
+#conbine the word typing by user to get the group's name
+mkdir ~/B221706/comparison
+awk '{print $1}' ~/B221706/calculation/"${sample1}_averagelog" > ~/B221706/comparison/file1
+awk '{print $1}' ~/B221706/calculation/"${sample2}_averagelog" > ~/B221706/comparison/file2
+#copy the average number of each exon from to group to a new file
+paste ~/B221706/comparison/file1 ~/B221706/comparison/file2 > ~/B221706/comparison/sample
+awk '{printf("%.2f\n",$1-$2)}' ~/B221706/comparison/sample > ~/B221706/comparison/minus
+#using the 1st group's average minus the 2ed group's. Using this result to judge the ralation of each exon whether it is bigger in 1st group or 2ed group
+paste ~/B221706/calculation/Clone1_0_Uninduced_summary ~/B221706/comparison/minus > ~/B221706/comparison/result_nosort
+#paste the information and gene name from on of the group file, because of the same order in all the group file
+sort ~/B221706/comparison/result_nosort -r -t $'\t' -n -k 3  > ~/B221706/comparison/result
+#sort by the number of result(1st group - 2ed group) from the bigger one to the smaller one
+
+head -n 20 ~/B221706/comparison/result
+#the first one on the screen shows the biggest difference which 1st group express more than 2ed group
+tail -n 20 ~/B221706/comparison/result
+#the last one on the screen shows the biggest difference which 2ed group express more than 1st group
